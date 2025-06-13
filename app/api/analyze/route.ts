@@ -4,10 +4,12 @@ export async function POST(req: NextRequest) {
   const { text } = await req.json();
   const apiKey = process.env.TEXTRAZOR_API_KEY;
 
+  // Validate presence of API key
   if (!apiKey) {
     return NextResponse.json({ error: "Missing TextRazor API key" }, { status: 500 });
   }
 
+  // Send text to TextRazor API for analysis
   const razorRes = await fetch("https://api.textrazor.com/", {
     method: "POST",
     headers: {
@@ -24,8 +26,12 @@ export async function POST(req: NextRequest) {
   const response = data.response;
 
   const seen = new Set<string>();
-  const keywordData =
-    (response.entities || []).map((ent: any) => {
+
+  // Parse and filter useful entities (excluding dates/times)
+  const keywordData = (response.entities || [])
+    .filter((ent: any) => ent.type && !ent.type.includes("Date") && !ent.type.includes("Time"))
+    .sort((a: any, b: any) => b.matchedText.length - a.matchedText.length) // Longest entities first
+    .map((ent: any) => {
       const matchedText = ent.matchedText;
       const start = ent.start;
       const end = ent.end;
@@ -35,11 +41,19 @@ export async function POST(req: NextRequest) {
       if (seen.has(key)) return null;
       seen.add(key);
 
-      const suggestions = [
-        { text: matchedText },
-        ...(ent.synonyms || []).map((syn: string) => ({ text: syn })),
-        ...(ent.entityId ? [{ text: ent.entityId }] : []),
-      ];
+      const wikiTitle = ent.wikipediaLink ? decodeURIComponent(ent.wikipediaLink.split('/').pop()) : "";
+
+      // Build suggestion list with synonyms, wiki title, etc.
+      const suggestions = Array.from(
+        new Set([
+          matchedText,
+          ...(ent.synonyms || []),
+          wikiTitle,
+          ent.entityId || "",
+        ])
+      )
+        .filter((s) => s && s.trim())
+        .map((s) => ({ text: s }));
 
       return {
         text: matchedText,
@@ -47,9 +61,13 @@ export async function POST(req: NextRequest) {
         end,
         score,
         suggestions,
+        wikiLink: ent.wikipediaLink || "",
+        wikidataId: ent.wikidataId || "",
       };
-    }).filter(Boolean);
+    })
+    .filter(Boolean);
 
+  // Send keyword data and full response for optional debugging
   return NextResponse.json({
     keywordData,
     analysis: response,
